@@ -25,6 +25,13 @@ module "final_snapshot_label" {
 locals {
   computed_major_engine_version = var.engine == "postgres" ? join(".", slice(split(".", var.engine_version), 0, 1)) : join(".", slice(split(".", var.engine_version), 0, 2))
   major_engine_version          = var.major_engine_version == "" ? local.computed_major_engine_version : var.major_engine_version
+  # Option and parameter group names in case none provided.
+  # When constructing these names it is important to include parameter group they refer to.
+  # Upgrading from one major version to another will fail otherwise. This happens because
+  # terraform will try to re-create this resources and fail to create new ones as the name
+  # is already taken.
+  default_option_group_name     = lower(replace("${module.label.id}-${var.db_parameter_group}", "/[^-a-zA-Z0-9]/", ""))
+  default_parameter_group_name  = lower(replace("${module.label.id}-${var.db_parameter_group}", "/[^-a-zA-Z0-9]/", ""))
 }
 
 resource "aws_db_instance" "default" {
@@ -82,7 +89,7 @@ resource "aws_db_instance" "default" {
 
 resource "aws_db_parameter_group" "default" {
   count  = length(var.parameter_group_name) == 0 && var.enabled ? 1 : 0
-  name   = module.label.id
+  name   = local.default_parameter_group_name
   family = var.db_parameter_group
   tags   = module.label.tags
 
@@ -94,11 +101,19 @@ resource "aws_db_parameter_group" "default" {
       value        = parameter.value.value
     }
   }
+
+  # Trying to destroy these resource before creating new ones
+  # will fail if the are still in use by the RDS instances.
+  # So in case of update we want first to create a new resource
+  # and then delete the old one after RDS hast been updated.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_db_option_group" "default" {
   count                = length(var.option_group_name) == 0 && var.enabled ? 1 : 0
-  name                 = module.label.id
+  name                 = local.default_option_group_name
   engine_name          = var.engine
   major_engine_version = local.major_engine_version
   tags                 = module.label.tags
@@ -122,6 +137,10 @@ resource "aws_db_option_group" "default" {
     }
   }
 
+  # Trying to destroy these resource before creating new ones
+  # will fail if the are still in use by the RDS instances.
+  # So in case of update we want first to create a new resource
+  # and then delete the old one after RDS hast been updated.
   lifecycle {
     create_before_destroy = true
   }
